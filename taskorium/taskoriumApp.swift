@@ -12,13 +12,45 @@ import SwiftData
 struct taskoriumApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Project.self,
+            Column.self,
+            Card.self,
+            Subtask.self
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
+        // Use lightweightMigration to allow schema evolution
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            allowsSave: true
+        )
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+
+            // Migrate existing projects to have order property
+            let context = container.mainContext
+            let descriptor = FetchDescriptor<Project>(sortBy: [SortDescriptor(\.createdAt)])
+            if let projects = try? context.fetch(descriptor) {
+                // Assign order based on creation date for existing projects without order
+                var needsSave = false
+                for (index, project) in projects.enumerated() {
+                    // Check if this project needs order assigned
+                    if index > 0 && project.order == 0 {
+                        project.order = index
+                        needsSave = true
+                    }
+                }
+                if needsSave {
+                    try? context.save()
+                }
+            }
+
+            return container
         } catch {
+            // If migration fails, print helpful error
+            print("Failed to create ModelContainer: \(error)")
+            print("You may need to delete the SwiftData store. See MIGRATION_GUIDE.md for instructions.")
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
