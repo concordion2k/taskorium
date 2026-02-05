@@ -45,6 +45,9 @@ struct ColumnView: View {
     @State private var isAddingCard = false
     @State private var newCardTitle = ""
     @State private var isDropTargeted = false
+    @State private var draggedCardId: UUID?
+    @State private var draggedCardHeight: CGFloat = 100
+    @State private var dropTargetIndex: Int?
     @FocusState private var isNewCardFocused: Bool
 
     var body: some View {
@@ -100,9 +103,69 @@ struct ColumnView: View {
 
             // Cards and Add Card button in ScrollView
             ScrollView {
-                VStack(spacing: 16) {
-                    ForEach(column.cards.sorted(by: { $0.order < $1.order })) { card in
-                        DraggableCardView(card: card, column: column, project: project)
+                VStack(spacing: 0) {
+                    ForEach(Array(column.cards.sorted(by: { $0.order < $1.order }).enumerated()), id: \.element.id) { index, card in
+                        VStack(spacing: 0) {
+                            // Drop zone above each card
+                            if draggedCardId != nil && draggedCardId != card.id {
+                                let isDropTarget = Binding<Bool>(
+                                    get: { dropTargetIndex == index },
+                                    set: { isTargeted in
+                                        if isTargeted {
+                                            dropTargetIndex = index
+                                        } else if dropTargetIndex == index {
+                                            dropTargetIndex = nil
+                                        }
+                                    }
+                                )
+
+                                DropZoneView(isTargeted: dropTargetIndex == index, cardHeight: draggedCardHeight)
+                                    .onDrop(of: [.text], isTargeted: isDropTarget) { providers in
+                                        handleCardDrop(providers: providers, at: index)
+                                    }
+                                    .padding(.bottom, dropTargetIndex == index ? 8 : 0)
+                            }
+
+                            // Only show card if it's not being dragged
+                            if draggedCardId != card.id {
+                                DraggableCardView(
+                                    card: card,
+                                    column: column,
+                                    project: project,
+                                    onDragStart: { cardId, cardHeight in
+                                        draggedCardId = cardId
+                                        draggedCardHeight = cardHeight
+                                    },
+                                    onDragEnd: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            draggedCardId = nil
+                                            dropTargetIndex = nil
+                                        }
+                                    }
+                                )
+                                .padding(.bottom, 16)
+                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                            }
+                        }
+                    }
+
+                    // Drop zone at the end
+                    if draggedCardId != nil {
+                        let isDropTarget = Binding<Bool>(
+                            get: { dropTargetIndex == column.cards.count },
+                            set: { isTargeted in
+                                if isTargeted {
+                                    dropTargetIndex = column.cards.count
+                                } else if dropTargetIndex == column.cards.count {
+                                    dropTargetIndex = nil
+                                }
+                            }
+                        )
+
+                        DropZoneView(isTargeted: dropTargetIndex == column.cards.count, cardHeight: draggedCardHeight)
+                            .onDrop(of: [.text], isTargeted: isDropTarget) { providers in
+                                handleCardDrop(providers: providers, at: column.cards.count)
+                            }
                     }
 
                     // Inline Add Card
@@ -164,9 +227,13 @@ struct ColumnView: View {
                 .padding(.bottom, 16)
             }
             .frame(maxHeight: .infinity)
-            .onDrop(of: [.text], isTargeted: $isDropTargeted) { providers in
-                handleDrop(providers: providers)
-            }
+            .background(
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onDrop(of: [.text], isTargeted: $isDropTargeted) { providers in
+                        handleDrop(providers: providers)
+                    }
+            )
         }
         .frame(width: 320)
         .frame(minHeight: 500)
@@ -196,44 +263,61 @@ struct ColumnView: View {
         }
     }
 
-    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+    private func handleCardDrop(providers: [NSItemProvider], at targetIndex: Int) -> Bool {
         guard let provider = providers.first else { return false }
 
-        // Get the card ID synchronously from the item provider
-        let semaphore = DispatchSemaphore(value: 0)
-        var cardId: UUID?
-
-        provider.loadItem(forTypeIdentifier: "public.text", options: nil) { item, error in
-            if let data = item as? Data,
-               let cardIdString = String(data: data, encoding: .utf8) {
-                cardId = UUID(uuidString: cardIdString)
+        // Use loadDataRepresentation for synchronous-like behavior
+        _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.text.identifier) { data, error in
+            guard let data = data,
+                  let cardIdString = String(data: data, encoding: .utf8),
+                  let cardId = UUID(uuidString: cardIdString) else {
+                return
             }
-            semaphore.signal()
+
+            DispatchQueue.main.async {
+                // Find and move the card immediately
+                for projectColumn in self.project.columns {
+                    if let cardIndex = projectColumn.cards.firstIndex(where: { $0.id == cardId }) {
+                        let card = projectColumn.cards[cardIndex]
+
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                            // Remove from old column
+                            projectColumn.cards.remove(at: cardIndex)
+
+                            // If same column, adjust target index if needed
+                            var adjustedIndex = targetIndex
+                            if projectColumn.id == self.column.id && cardIndex < targetIndex {
+                                adjustedIndex -= 1
+                            }
+
+                            // Insert at target position
+                            card.order = adjustedIndex
+                            self.column.cards.insert(card, at: adjustedIndex)
+
+                            // Reorder all cards in both columns
+                            for (index, c) in projectColumn.cards.enumerated() {
+                                c.order = index
+                            }
+                            for (index, c) in self.column.cards.enumerated() {
+                                c.order = index
+                            }
+
+                            self.draggedCardId = nil
+                            self.dropTargetIndex = nil
+                        }
+
+                        return
+                    }
+                }
+            }
         }
 
-        // Wait briefly for the load to complete
-        _ = semaphore.wait(timeout: .now() + 0.1)
+        return true
+    }
 
-        guard let id = cardId else { return false }
-
-        // Move the card immediately on the main thread
-        // Find the card in all columns
-        for projectColumn in project.columns {
-            if let cardIndex = projectColumn.cards.firstIndex(where: { $0.id == id }) {
-                let card = projectColumn.cards[cardIndex]
-
-                // Remove from old column
-                projectColumn.cards.remove(at: cardIndex)
-
-                // Add to new column
-                card.order = column.cards.count
-                column.cards.append(card)
-
-                return true
-            }
-        }
-
-        return false
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        // Handle drops on the column background (at the end)
+        return handleCardDrop(providers: providers, at: column.cards.count)
     }
 }
 
@@ -241,8 +325,12 @@ struct DraggableCardView: View {
     @Bindable var card: Card
     let column: Column
     let project: Project
+    var onDragStart: ((UUID, CGFloat) -> Void)?
+    var onDragEnd: (() -> Void)?
     @State private var showingEditSheet = false
     @State private var isHovering = false
+    @State private var isDragging = false
+    @State private var cardHeight: CGFloat = 100
 
     var completedSubtasks: Int {
         card.subtasks.filter { $0.isCompleted }.count
@@ -276,8 +364,16 @@ struct DraggableCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
+            GeometryReader { geometry in
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .onAppear {
+                        cardHeight = geometry.size.height
+                    }
+                    .onChange(of: geometry.size.height) { oldValue, newValue in
+                        cardHeight = newValue
+                    }
+            }
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -291,11 +387,57 @@ struct DraggableCardView: View {
             showingEditSheet = true
         }
         .onDrag {
-            NSItemProvider(object: card.id.uuidString as NSString)
+            isDragging = true
+            onDragStart?(card.id, cardHeight)
+            let itemProvider = NSItemProvider(object: card.id.uuidString as NSString)
+            itemProvider.suggestedName = card.title
+
+            // Call onDragEnd when drag session ends
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                if !isDragging {
+                    onDragEnd?()
+                }
+            }
+
+            return itemProvider
+        }
+        .onChange(of: isDragging) { oldValue, newValue in
+            if !newValue {
+                onDragEnd?()
+            }
         }
         .sheet(isPresented: $showingEditSheet) {
             EditCardSheet(card: card)
         }
+    }
+}
+
+struct DropZoneView: View {
+    let isTargeted: Bool
+    let cardHeight: CGFloat
+
+    var body: some View {
+        Group {
+            if isTargeted {
+                // Full card-sized drop zone when targeted - matches dragged card size
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.accentColor.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8, 4]))
+                            .foregroundColor(Color.accentColor.opacity(0.6))
+                    )
+                    .frame(height: cardHeight)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                // Large invisible hit area for easy targeting
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 60)
+                    .contentShape(Rectangle())
+            }
+        }
+        .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isTargeted)
     }
 }
 

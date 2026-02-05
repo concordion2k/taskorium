@@ -16,43 +16,54 @@ struct ProjectListView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedProject) {
-                ForEach(projects) { project in
-                    NavigationLink(value: project) {
-                        HStack(spacing: 12) {
-                            PlanetView(planetType: project.planetType, size: 32)
+            VStack(spacing: 0) {
+                List(selection: $selectedProject) {
+                    ForEach(projects) { project in
+                        NavigationLink(value: project) {
+                            HStack(spacing: 12) {
+                                PlanetView(planetType: project.planetType, size: 32)
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(project.name)
-                                    .font(.headline)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(project.name)
+                                        .font(.headline)
 
-                                if !project.projectDescription.isEmpty {
-                                    Text(project.projectDescription)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
+                                    if !project.projectDescription.isEmpty {
+                                        Text(project.projectDescription)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
                                 }
                             }
+                            .padding(.vertical, 4)
                         }
-                        .padding(.vertical, 4)
+                        .draggable(project.id.uuidString)
                     }
-                    .draggable(project.id.uuidString)
+                    .onMove { source, destination in
+                        moveProjects(from: source, to: destination)
+                    }
                 }
-                .onMove { source, destination in
-                    moveProjects(from: source, to: destination)
-                }
-            }
-            .navigationTitle("Projects")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
+                .navigationTitle("Projects")
+
+                // Fixed bottom toolbar with new project button
+                Divider()
+                HStack {
+                    Spacer()
                     Button(action: { showingNewProjectSheet = true }) {
                         Label("New Project", systemImage: "plus")
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    Spacer()
                 }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .background(.ultraThinMaterial)
             }
             .sheet(isPresented: $showingNewProjectSheet) {
                 NewProjectSheet(projectCount: projects.count)
             }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 300)
         } detail: {
             if let project = selectedProject {
                 ProjectDetailView(project: project)
@@ -70,15 +81,19 @@ struct ProjectListView: View {
                 }
             }
         }
+        .navigationSplitViewStyle(.balanced)
+        .toolbar(removing: .sidebarToggle)
     }
 
     private func moveProjects(from source: IndexSet, to destination: Int) {
-        var updatedProjects = projects.map { $0 }
-        updatedProjects.move(fromOffsets: source, toOffset: destination)
+        withAnimation(.easeInOut(duration: 0.3)) {
+            var updatedProjects = projects.map { $0 }
+            updatedProjects.move(fromOffsets: source, toOffset: destination)
 
-        // Update the order of all projects
-        for (index, project) in updatedProjects.enumerated() {
-            project.order = index
+            // Update the order of all projects
+            for (index, project) in updatedProjects.enumerated() {
+                project.order = index
+            }
         }
     }
 }
