@@ -154,36 +154,54 @@ struct NewProjectSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Project Details") {
-                    TextField("Project Name", text: $name)
-                    TextField("Description (Optional)", text: $description, axis: .vertical)
-                        .lineLimit(3...6)
-                }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    // Project Details
+                    VStack(alignment: .leading, spacing: 16) {
+                        PlanetarySectionHeader(title: "Project Details", icon: "folder.fill")
 
-                Section("Choose a Planet") {
-                    LazyVGrid(columns: [
-                        GridItem(.adaptive(minimum: 80), spacing: 20)
-                    ], spacing: 20) {
-                        ForEach(PlanetType.allCases, id: \.self) { planet in
-                            VStack {
-                                PlanetView(planetType: planet, size: 60)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 30)
-                                            .stroke(selectedPlanet == planet ? Color.accentColor : Color.clear, lineWidth: 3)
-                                    )
-                                Text(planet.displayName)
-                                    .font(.caption)
-                            }
-                            .onTapGesture {
-                                selectedPlanet = planet
+                        PlanetaryTextField(label: "Name", icon: "star.fill", text: $name)
+
+                        PlanetaryTextField(label: "Description", icon: "text.alignleft",
+                                          text: $description, axis: .vertical, lineLimit: 3...6)
+                    }
+
+                    // Planet Selection
+                    VStack(alignment: .leading, spacing: 12) {
+                        PlanetarySectionHeader(title: "Choose a Planet", icon: "globe.americas.fill")
+
+                        LazyVGrid(columns: [
+                            GridItem(.adaptive(minimum: 80), spacing: 20)
+                        ], spacing: 20) {
+                            ForEach(PlanetType.allCases, id: \.self) { planet in
+                                VStack(spacing: 6) {
+                                    PlanetView(planetType: planet, size: 60)
+                                        .overlay(
+                                            Circle()
+                                                .stroke(
+                                                    selectedPlanet == planet
+                                                        ? LinearGradient(colors: [.purple, .cyan],
+                                                                         startPoint: .topLeading, endPoint: .bottomTrailing)
+                                                        : LinearGradient(colors: [.clear], startPoint: .leading, endPoint: .trailing),
+                                                    lineWidth: 3
+                                                )
+                                                .frame(width: 66, height: 66)
+                                        )
+                                    Text(planet.displayName)
+                                        .font(.caption)
+                                        .foregroundStyle(selectedPlanet == planet ? .primary : .secondary)
+                                }
+                                .onTapGesture {
+                                    selectedPlanet = planet
+                                }
                             }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical)
                 }
+                .padding(24)
             }
-            .formStyle(.grouped)
+            .background(Color(nsColor: .windowBackgroundColor))
             .navigationTitle("New Project")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
